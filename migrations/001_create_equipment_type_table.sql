@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS equipment_type (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    serial_mask VARCHAR(50) NOT NULL
+);

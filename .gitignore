@@ -1,0 +1,7 @@
+*.log
+restVenv/*
+*.enc
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
