@@ -1,13 +1,11 @@
 import logging
 from typing import List, Dict, Union, Tuple, Optional
-from Database.database_base import DatabaseBase
+from Database.query_executor import QueryExecutor
 from Models.models import EquipmentInput  
 from pydantic import ValidationError
 from Utils.decorators import log_and_handle_errors  
 
-
 logger = logging.getLogger(__name__)
-
 
 class EquipmentManager:
     """
@@ -20,7 +18,7 @@ class EquipmentManager:
 
         :param config: Конфигурация базы данных.
         """
-        self.db = DatabaseBase(config)
+        self.db = QueryExecutor(config)
         logger.info("EquipmentManager initialized with database configuration.")
 
     @log_and_handle_errors("Paginating query")
@@ -101,7 +99,7 @@ class EquipmentManager:
         errors = []
         success_count = 0
 
-        with self.db.begin_transaction() as connection:
+        with self.db.transaction_manager.transaction_context() as connection:
             for equipment in equipment_list:
                 try:
                     validated_data = EquipmentInput(**equipment)
@@ -109,16 +107,12 @@ class EquipmentManager:
                     errors.append(f"Validation error: {e}")
                     continue
 
-               
                 is_valid, result = self._validate_and_get_type_id(validated_data.serial_number)
                 if not is_valid:
                     errors.append(f"Serial number '{validated_data.serial_number}' error: {result}")
                     continue
 
-                
                 type_id = result
-
-               
                 query = "INSERT INTO equipment (type_id, serial_number, note, is_deleted) VALUES (%s, %s, %s, %s)"
                 connection.cursor().execute(query, (type_id, validated_data.serial_number, validated_data.note, False))
                 success_count += 1
@@ -173,17 +167,14 @@ class EquipmentManager:
         :param data: Словарь с данными для обновления.
         :return: Кортеж (True, сообщение) при успешном обновлении.
         """
-       
         if not self._check_equipment_exists(equipment_id, check_deleted=False):
             logger.error(f"Equipment with ID '{equipment_id}' does not exist or has been deleted.")
             return False, f"Equipment with ID '{equipment_id}' does not exist or has been deleted."
 
-        
-        with self.db.begin_transaction() as connection:
-            set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
-            query = f"UPDATE equipment SET {set_clause} WHERE id = %s"
-            params = tuple(data.values()) + (equipment_id,)
-            connection.cursor().execute(query, params)
+        set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
+        query = f"UPDATE equipment SET {set_clause} WHERE id = %s"
+        params = tuple(data.values()) + (equipment_id,)
+        self.db.execute(query, params, commit=True)
 
         return True, f"Equipment with ID '{equipment_id}' updated successfully"
 
@@ -195,13 +186,11 @@ class EquipmentManager:
         :param equipment_id: ID оборудования.
         :return: Кортеж (True, сообщение) при успешном удалении.
         """
-        
         if not self._check_equipment_exists(equipment_id, check_deleted=False):
             logger.error(f"Equipment with ID '{equipment_id}' does not exist or has been deleted.")
             return False, f"Equipment with ID '{equipment_id}' does not exist or has been deleted."
-        
-        with self.db.begin_transaction() as connection:
-            query = "UPDATE equipment SET is_deleted = %s WHERE id = %s"
-            connection.cursor().execute(query, (True, equipment_id))
+
+        query = "UPDATE equipment SET is_deleted = %s WHERE id = %s"
+        self.db.execute(query, (True, equipment_id), commit=True)
 
         return True, f"Equipment with ID '{equipment_id}' soft deleted successfully"
