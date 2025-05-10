@@ -1,13 +1,12 @@
 import logging
-from typing import List, Dict, Tuple, Union
+from typing import List, Dict, Tuple, Union, Optional
 from pydantic import ValidationError
 from Models.models import EquipmentListInput, EquipmentUpdateInput
-from Database.equipment_manager import EquipmentManager
+from Database.query_executor import QueryExecutor
 from Utils.decorators import log_and_handle_errors  # Импорт декоратора
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
-
 
 class EquipmentService:
     """
@@ -20,7 +19,7 @@ class EquipmentService:
 
         :param config: Конфигурация базы данных.
         """
-        self.manager = EquipmentManager(config)
+        self.db = QueryExecutor(config)
         logger.info("EquipmentService initialized with database configuration.")
 
     def _validate_pagination_params(self, page: int, limit: int):
@@ -41,108 +40,176 @@ class EquipmentService:
         """
         logger.info(f"{operation} result: {result}")
 
-    @log_and_handle_errors("Adding equipment")
-    def add_equipment(self, equipment_list: List[Dict[str, str]]) -> Tuple[bool, str]:
+    @log_and_handle_errors("Paginating query")
+    def _paginate_query(self, query: str, page: int, limit: int, params: Optional[Tuple] = ()) -> List[Dict[str, Union[int, str]]]:
         """
-        Добавляет несколько записей в таблицу equipment.
+        Выполняет запрос с пагинацией.
 
-        :param equipment_list: Список словарей с серийными номерами и примечаниями.
-        :return: Кортеж (True, сообщение) если добавление успешно, иначе (False, сообщение об ошибке).
-        """
-        logger.info(f"Adding equipment: {equipment_list}")
-        if not equipment_list:
-            logger.error("Equipment list is empty.")
-            return False, "Equipment list is empty."
-
-        try:
-            validated_data = EquipmentListInput.parse_obj(equipment_list).root
-        except ValidationError as e:
-            logger.error(f"Validation error: {e}")
-            return False, "Validation error: Invalid input data."
-
-        result = self.manager.add_equipment([item.dict() for item in validated_data])
-        self._log_operation_result("Add equipment", result)
-        return result
-
-    @log_and_handle_errors("Fetching all equipment")
-    def get_all_equipment(self, page: int, limit: int) -> List[Dict[str, Union[int, str]]]:
-        """
-        Получает список оборудования с пагинацией.
-
+        :param query: SQL-запрос.
         :param page: Номер страницы (начиная с 1).
         :param limit: Лимит записей на странице.
-        :return: Список словарей с данными оборудования.
+        :param params: Дополнительные параметры для SQL-запроса.
+        :return: Список записей.
         """
-        logger.info(f"Fetching all equipment with page={page}, limit={limit}")
-        self._validate_pagination_params(page, limit)
-        result = self.manager.get_all_equipment(page, limit)
-        self._log_operation_result("Fetch all equipment", result)
-        return result
-
-    @log_and_handle_errors("Fetching equipment by ID")
-    def get_equipment_by_id(self, equipment_id: int) -> Dict[str, Union[int, str]]:
-        """
-        Получает запись оборудования по ID.
-
-        :param equipment_id: ID оборудования.
-        :return: Словарь с данными оборудования.
-        """
-        logger.info(f"Fetching equipment with id={equipment_id}")
-        equipment = self.manager.get_equipment_by_id(equipment_id)
-        if not equipment:
-            logger.error(f"Equipment with ID {equipment_id} not found.")
-            raise ValueError(f"Equipment with ID {equipment_id} not found.")
-        self._log_operation_result("Fetch equipment by ID", equipment)
-        return equipment
-
-    @log_and_handle_errors("Updating equipment")
-    def update_equipment(self, equipment_id: int, data: Dict[str, Union[int, str]]) -> Tuple[bool, str]:
-        """
-        Обновляет запись оборудования по ID.
-
-        :param equipment_id: ID оборудования.
-        :param data: Данные для обновления (ключи — названия столбцов).
-        :return: Кортеж (True, сообщение) если обновление успешно, иначе (False, сообщение об ошибке).
-        """
-        logger.info(f"Updating equipment with id={equipment_id} and data={data}")
-        if not data:
-            logger.error("No data provided for update.")
-            return False, "No data provided for update."
-
-        try:
-            validated_data = EquipmentUpdateInput.parse_obj(data)
-        except ValidationError as e:
-            logger.error(f"Validation error: {e}")
-            return False, "Validation error: Invalid input data."
-
-        result = self.manager.update_equipment(equipment_id, validated_data.dict(exclude_unset=True))
-        self._log_operation_result("Update equipment", result)
-        return result
-
-    @log_and_handle_errors("Soft deleting equipment")
-    def soft_delete_equipment(self, equipment_id: int) -> Tuple[bool, str]:
-        """
-        Мягко удаляет запись оборудования, устанавливая is_deleted = True.
-
-        :param equipment_id: ID оборудования.
-        :return: Кортеж (True, сообщение) если удаление успешно, иначе (False, сообщение об ошибке).
-        """
-        logger.info(f"Soft deleting equipment with id={equipment_id}")
-        result = self.manager.soft_delete_equipment(equipment_id)
-        self._log_operation_result("Soft delete equipment", result)
-        return result
+        if page < 1:
+            logger.error("Page number must be 1 or greater")
+            raise ValueError("Page number must be 1 or greater")
+        
+        offset = limit * (page - 1)
+        paginated_query = f"{query} LIMIT %s OFFSET %s"
+        return self.db.execute(paginated_query, params + (limit, offset), fetchall=True)
 
     @log_and_handle_errors("Fetching all equipment types")
     def get_all_equipment_types(self, page: int, limit: int) -> List[Dict[str, Union[int, str]]]:
         """
-        Получает список всех типов оборудования с пагинацией.
+        Получение списка всех типов оборудования с пагинацией.
 
         :param page: Номер страницы (начиная с 1).
         :param limit: Лимит записей на странице.
-        :return: Список словарей с данными типов оборудования.
+        :return: Список типов оборудования.
         """
-        logger.info(f"Fetching all equipment types with page={page}, limit={limit}")
-        self._validate_pagination_params(page, limit)
-        result = self.manager.get_all_equipment_types(page, limit)
-        self._log_operation_result("Fetch all equipment types", result)
-        return result
+        query = "SELECT id, name, serial_mask FROM equipment_type"
+        return self._paginate_query(query, page, limit)
+
+    @log_and_handle_errors("Validating serial number")
+    def _validate_and_get_type_id(self, serial_number: str) -> Tuple[bool, Union[int, str]]:
+        """
+        Валидация серийного номера и получение type_id.
+
+        :param serial_number: Серийный номер для проверки.
+        :return: Кортеж (True, type_id) при успешной валидации, иначе (False, сообщение об ошибке).
+        """
+        query = """
+            SELECT id
+            FROM equipment_type
+            WHERE %s REGEXP CONCAT(
+                '(?i)',
+                REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(serial_mask, 'N', '[0-9]'),
+                                'A', '[A-Za-z]'
+                            ),
+                            'a', '[a-z]'
+                        ),
+                        'X', '[A-Z0-9]'
+                    ),
+                    'Z', '[-_@]'
+                )
+            )
+            LIMIT 1
+        """
+        result = self.db.execute(query, (serial_number,), fetchone=True)
+
+        if not result:
+            return False, f"Serial number '{serial_number}' does not match any mask"
+
+        return True, result['id']
+
+    @log_and_handle_errors("Adding equipment")
+    def add_equipment(self, equipment_list: List[Dict[str, str]]) -> Tuple[bool, str]:
+        """
+        Добавление нового оборудования в базу данных.
+
+        :param equipment_list: Список словарей с данными оборудования.
+        :return: Кортеж (True, сообщение) при успешном добавлении, иначе (False, сообщение об ошибке).
+        """
+        errors = []
+        success_count = 0
+
+        with self.db.transaction_manager.transaction_context() as connection:
+            for equipment in equipment_list:
+                try:
+                    validated_data = EquipmentListInput.parse_obj(equipment).root
+                except ValidationError as e:
+                    errors.append(f"Validation error: {e}")
+                    continue
+
+                is_valid, result = self._validate_and_get_type_id(validated_data.serial_number)
+                if not is_valid:
+                    errors.append(f"Serial number '{validated_data.serial_number}' error: {result}")
+                    continue
+
+                type_id = result
+                query = "INSERT INTO equipment (type_id, serial_number, note, is_deleted) VALUES (%s, %s, %s, %s)"
+                connection.cursor().execute(query, (type_id, validated_data.serial_number, validated_data.note, False))
+                success_count += 1
+
+        if errors:
+            return False, f"Some records failed to add: {', '.join(errors)}"
+
+        return True, "All equipment records added successfully"
+
+    @log_and_handle_errors("Fetching all equipment")
+    def get_all_equipment(self, page: int, limit: int) -> List[Dict[str, Union[int, str]]]:
+        """
+        Получение списка оборудования с пагинацией.
+
+        :param page: Номер страницы (начиная с 1).
+        :param limit: Лимит записей на странице.
+        :return: Список оборудования.
+        """
+        query = "SELECT id, type_id, serial_number, note, is_deleted FROM equipment"
+        return self._paginate_query(query, page, limit)
+
+    @log_and_handle_errors("Fetching equipment by ID")
+    def get_equipment_by_id(self, equipment_id: int) -> Optional[Dict[str, Union[int, str]]]:
+        """
+        Получение оборудования по ID.
+
+        :param equipment_id: ID оборудования.
+        :return: Словарь с данными оборудования или None, если запись не найдена.
+        """
+        query = "SELECT id, type_id, serial_number, note, is_deleted FROM equipment WHERE id = %s"
+        return self.db.execute(query, (equipment_id,), fetchone=True)
+
+    @log_and_handle_errors("Checking if equipment exists")
+    def _check_equipment_exists(self, equipment_id: int, check_deleted: bool = False) -> bool:
+        """
+        Проверяет, существует ли запись оборудования в базе данных.
+
+        :param equipment_id: ID оборудования.
+        :param check_deleted: Если True, проверяет, что запись помечена как удалённая.
+        :return: True, если запись существует (и соответствует параметру check_deleted), иначе False.
+        """
+        query = "SELECT id FROM equipment WHERE id = %s AND is_deleted = %s"
+        result = self.db.execute(query, (equipment_id, check_deleted), fetchone=True)
+        return bool(result)
+
+    @log_and_handle_errors("Updating equipment")
+    def update_equipment(self, equipment_id: int, data: Dict[str, Union[int, str]]) -> Tuple[bool, str]:
+        """
+        Обновление данных оборудования по ID.
+
+        :param equipment_id: ID оборудования.
+        :param data: Словарь с данными для обновления.
+        :return: Кортеж (True, сообщение) при успешном обновлении.
+        """
+        if not self._check_equipment_exists(equipment_id, check_deleted=False):
+            logger.error(f"Equipment with ID '{equipment_id}' does not exist or has been deleted.")
+            return False, f"Equipment with ID '{equipment_id}' does not exist or has been deleted."
+
+        set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
+        query = f"UPDATE equipment SET {set_clause} WHERE id = %s"
+        params = tuple(data.values()) + (equipment_id,)
+        self.db.execute(query, params, commit=True)
+
+        return True, f"Equipment with ID '{equipment_id}' updated successfully"
+
+    @log_and_handle_errors("Soft deleting equipment")
+    def soft_delete_equipment(self, equipment_id: int) -> Tuple[bool, str]:
+        """
+        Мягкое удаление оборудования (установка is_deleted = True).
+
+        :param equipment_id: ID оборудования.
+        :return: Кортеж (True, сообщение) при успешном удалении.
+        """
+        if not self._check_equipment_exists(equipment_id, check_deleted=False):
+            logger.error(f"Equipment with ID '{equipment_id}' does not exist or has been deleted.")
+            return False, f"Equipment with ID '{equipment_id}' does not exist или has been deleted."
+
+        query = "UPDATE equipment SET is_deleted = %s WHERE id = %s"
+        self.db.execute(query, (True, equipment_id), commit=True)
+
+        return True, f"Equipment with ID '{equipment_id}' soft deleted successfully"
