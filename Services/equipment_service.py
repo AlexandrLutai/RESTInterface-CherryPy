@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import List, Dict, Tuple, Union, Optional
 from pydantic import ValidationError
 from Models.models import EquipmentListInput, EquipmentUpdateInput
@@ -79,33 +80,21 @@ class EquipmentService:
         :param serial_number: Серийный номер для проверки.
         :return: Кортеж (True, type_id) при успешной валидации, иначе (False, сообщение об ошибке).
         """
-        query = """
-            SELECT id
-            FROM equipment_type
-            WHERE %s REGEXP CONCAT(
-                '(?i)',
-                REPLACE(
-                    REPLACE(
-                        REPLACE(
-                            REPLACE(
-                                REPLACE(serial_mask, 'N', '[0-9]'),
-                                'A', '[A-Za-z]'
-                            ),
-                            'a', '[a-z]'
-                        ),
-                        'X', '[A-Z0-9]'
-                    ),
-                    'Z', '[-_@]'
-                )
-            )
-            LIMIT 1
-        """
-        result = self.db.execute(query, (serial_number,), fetchone=True)
-
-        if not result:
-            return False, f"Serial number '{serial_number}' does not match any mask"
-
-        return True, result['id']
+        # Получаем все маски и id типов оборудования
+        query = "SELECT id, serial_mask FROM equipment_type"
+        types = self.db.execute(query, fetchall=True)
+        for t in types:
+            serial_mask = t["serial_mask"]
+            # Преобразуем маску в регулярное выражение
+            mask_regex = serial_mask \
+                .replace('N', '[0-9]') \
+                .replace('A', '[A-Z]') \
+                .replace('a', '[a-z]') \
+                .replace('X', '[A-Z0-9]') \
+                .replace('Z', '[-_@]')
+            if re.fullmatch(mask_regex, serial_number):
+                return True, t["id"]
+        return False, f"Serial number '{serial_number}' does not match any mask"
 
     @log_and_handle_errors("Adding equipment")
     def add_equipment(self, equipment_list: List[Dict[str, str]]) -> Tuple[bool, str]:
