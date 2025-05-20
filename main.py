@@ -32,7 +32,6 @@ if __name__ == '__main__':
         "database": os.getenv("DB_NAME"),
     }
 
-   
     cherrypy.config.update({
         'server.socket_host': '127.0.0.1',
         'server.socket_port': 8080,
@@ -45,5 +44,13 @@ if __name__ == '__main__':
         'request.show_tracebacks': False  
     })
 
-  
-    cherrypy.quickstart(EquipmentController(db_config), '/api')
+    dispatcher_conf = {
+        '/': {
+            'request.dispatch': cherrypy.dispatch.MethodDispatcher(),
+            'tools.auth.on': True,
+            'tools.json_in.on': True,
+            'tools.json_out.on': True,
+        }
+    }
+
+    cherrypy.quickstart(EquipmentController(db_config), '/api', config=dispatcher_conf)
