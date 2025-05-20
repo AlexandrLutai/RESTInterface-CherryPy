@@ -115,20 +115,36 @@ class EquipmentService:
                     errors.append(f"Validation error: {e}")
                     continue
 
-                is_valid, result = self._validate_and_get_type_id(validated_data.serial_number)
-                if not is_valid:
-                    errors.append(f"Serial number '{validated_data.serial_number}' error: {result}")
+                type_id = getattr(validated_data, "type_id", None)
+                serial_number = getattr(validated_data, "serial_number", None)
+                note = getattr(validated_data, "note", "")
+
+                if type_id is None or serial_number is None:
+                    errors.append("type_id and serial_number are required fields.")
                     continue
 
-                type_id = result
-                query = "INSERT INTO equipment (type_id, serial_number, note, is_deleted) VALUES (%s, %s, %s, %s)"
-                connection.cursor().execute(query, (type_id, validated_data.serial_number, validated_data.note, False))
+                # Валидация серийного номера по маске типа оборудования
+                is_valid, msg = self._validate_serial_by_type(type_id, serial_number)
+                if not is_valid:
+                    errors.append(msg)
+                    continue
+
+                # Проверка уникальности связки type_id + serial_number
+                if not self._is_unique_equipment(type_id, serial_number):
+                    errors.append(f"Serial number '{serial_number}' already exists for type_id {type_id}")
+                    continue
+
+                # Добавление записи
+                insert_query = "INSERT INTO equipment (type_id, serial_number, note, is_deleted) VALUES (%s, %s, %s, %s)"
+                connection.cursor().execute(insert_query, (type_id, serial_number, note, False))
                 success_count += 1
 
-        if errors:
-            return False, f"Some records failed to add: {', '.join(errors)}"
-
-        return True, "All equipment records added successfully"
+        if errors and success_count == 0:
+            return False, f"All records failed to add: {', '.join(errors)}"
+        elif errors:
+            return True, f"Added {success_count} equipment(s), but some records failed: {', '.join(errors)}"
+        else:
+            return True, "All equipment records added successfully"
 
     @log_and_handle_errors("Fetching all equipment")
     def get_all_equipment(
@@ -221,3 +237,44 @@ class EquipmentService:
         self.db.execute(query, (True, equipment_id), commit=True)
 
         return True, f"Equipment with ID '{equipment_id}' soft deleted successfully"
+
+    def _validate_serial_by_type(self, type_id: int, serial_number: str) -> Tuple[bool, str]:
+        """
+        Валидация серийного номера по маске типа оборудования.
+
+        :param type_id: ID типа оборудования.
+        :param serial_number: Серийный номер.
+        :return: (True, '') если валидно, иначе (False, сообщение об ошибке).
+        """
+        mask_result = self.db.execute(
+            "SELECT serial_mask FROM equipment_type WHERE id = %s", (type_id,), fetchone=True
+        )
+        if not mask_result:
+            return False, f"type_id '{type_id}' does not exist"
+        serial_mask = mask_result["serial_mask"]
+        mask_regex = serial_mask \
+            .replace('N', '[0-9]') \
+            .replace('A', '[A-Z]') \
+            .replace('a', '[a-z]') \
+            .replace('X', '[A-Z0-9]') \
+            .replace('Z', '[-_@]')
+        if not re.fullmatch(mask_regex, serial_number):
+            return False, f"Serial number '{serial_number}' does not match mask '{serial_mask}' for type_id {type_id}"
+        return True, ""
+
+    def _is_unique_equipment(self, type_id: int, serial_number: str, exclude_id: Optional[int] = None) -> bool:
+        """
+        Проверяет уникальность связки type_id + serial_number.
+
+        :param type_id: ID типа оборудования.
+        :param serial_number: Серийный номер.
+        :param exclude_id: Исключить этот ID из проверки (для обновления).
+        :return: True, если уникально, иначе False.
+        """
+        query = "SELECT id FROM equipment WHERE type_id = %s AND serial_number = %s AND is_deleted = 0"
+        params = [type_id, serial_number]
+        if exclude_id:
+            query += " AND id != %s"
+            params.append(exclude_id)
+        result = self.db.execute(query, tuple(params), fetchone=True)
+        return result is None
