@@ -26,7 +26,13 @@ class EquipmentController:
         """
         if id:
             return self.service.get_equipment_by_id(int(id))
-        return self.service.get_all_equipment(int(page), int(limit))
+        # Формируем фильтры из query-параметров
+        filters = {}
+        for key in ("type_id", "serial_number", "note"):
+            value = kwargs.get(key)
+            if value is not None:
+                filters[key] = value
+        return self.service.get_all_equipment(int(page), int(limit), filters)
 
     @cherrypy.tools.json_in()
     @cherrypy.tools.json_out()

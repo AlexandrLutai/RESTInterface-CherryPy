@@ -131,16 +131,35 @@ class EquipmentService:
         return True, "All equipment records added successfully"
 
     @log_and_handle_errors("Fetching all equipment")
-    def get_all_equipment(self, page: int, limit: int) -> List[Dict[str, Union[int, str]]]:
+    def get_all_equipment(
+        self,
+        page: int,
+        limit: int,
+        filters: Optional[Dict[str, Union[str, int]]] = None
+    ) -> List[Dict[str, Union[int, str]]]:
         """
-        Получение списка оборудования с пагинацией.
+        Получение списка оборудования с пагинацией и поиском по фильтрам.
 
         :param page: Номер страницы (начиная с 1).
         :param limit: Лимит записей на странице.
+        :param filters: Словарь с фильтрами (type_id, serial_number, note).
         :return: Список оборудования.
         """
-        query = "SELECT id, type_id, serial_number, note, is_deleted FROM equipment"
-        return self._paginate_query(query, page, limit)
+        base_query = "SELECT id, type_id, serial_number, note, is_deleted FROM equipment WHERE is_deleted = 0"
+        params = []
+
+        if filters:
+            if "type_id" in filters:
+                base_query += " AND type_id = %s"
+                params.append(filters["type_id"])
+            if "serial_number" in filters:
+                base_query += " AND serial_number LIKE %s"
+                params.append(f"%{filters['serial_number']}%")
+            if "note" in filters:
+                base_query += " AND note LIKE %s"
+                params.append(f"%{filters['note']}%")
+
+        return self._paginate_query(base_query, page, limit, tuple(params))
 
     @log_and_handle_errors("Fetching equipment by ID")
     def get_equipment_by_id(self, equipment_id: int) -> Optional[Dict[str, Union[int, str]]]:
