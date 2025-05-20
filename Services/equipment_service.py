@@ -204,7 +204,7 @@ class EquipmentService:
     @log_and_handle_errors("Updating equipment")
     def update_equipment(self, equipment_id: int, data: Dict[str, Union[int, str]]) -> Tuple[bool, str]:
         """
-        Обновление данных оборудования по ID.
+        Обновление данных оборудования по ID с валидацией.
 
         :param equipment_id: ID оборудования.
         :param data: Словарь с данными для обновления.
@@ -214,9 +214,35 @@ class EquipmentService:
             logger.error(f"Equipment with ID '{equipment_id}' does not exist or has been deleted.")
             return False, f"Equipment with ID '{equipment_id}' does not exist or has been deleted."
 
-        set_clause = ", ".join([f"{key} = %s" for key in data.keys()])
+        # Получаем текущие значения type_id и serial_number
+        current = self.db.execute(
+            "SELECT type_id, serial_number FROM equipment WHERE id = %s", (equipment_id,), fetchone=True
+        )
+        if not current:
+            return False, f"Equipment with ID '{equipment_id}' not found."
+
+        # Определяем новые значения для проверки
+        new_type_id = data.get("type_id", current["type_id"])
+        new_serial_number = data.get("serial_number", current["serial_number"])
+
+        # Валидация серийного номера по маске типа оборудования
+        is_valid, msg = self._validate_serial_by_type(new_type_id, new_serial_number)
+        if not is_valid:
+            return False, msg
+
+        # Проверка уникальности связки type_id + serial_number (исключая текущую запись)
+        if not self._is_unique_equipment(new_type_id, new_serial_number, exclude_id=equipment_id):
+            return False, f"Serial number '{new_serial_number}' already exists for type_id {new_type_id}"
+
+        # Формируем запрос на обновление только разрешённых полей
+        allowed_fields = {"type_id", "serial_number", "note"}
+        update_fields = {k: v for k, v in data.items() if k in allowed_fields}
+        if not update_fields:
+            return False, "No valid fields to update."
+
+        set_clause = ", ".join([f"{key} = %s" for key in update_fields.keys()])
         query = f"UPDATE equipment SET {set_clause} WHERE id = %s"
-        params = tuple(data.values()) + (equipment_id,)
+        params = tuple(update_fields.values()) + (equipment_id,)
         self.db.execute(query, params, commit=True)
 
         return True, f"Equipment with ID '{equipment_id}' updated successfully"
